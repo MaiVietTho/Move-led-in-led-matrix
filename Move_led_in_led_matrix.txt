@@ -1,0 +1,127 @@
+#include <wiringPiI2C.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <wiringPiSPI.h>
+#include <time.h>
+#include <math.h>
+
+#define spi 0
+
+int mpu;
+int ax_15_8, ax_7_0, az_15_8, az_7_0, ay_15_8, ay_7_0;
+int16_t ax,ay,az;
+float alpha_x, alpha_y;
+int currentLEDPosition = 28;
+int newLEDPosition ;
+int delta ; 
+
+void sendData(uint8_t Address, uint8_t value){
+    uint8_t data[2];
+    data[0] = Address;
+    data[1] = value;
+    wiringPiSPIDataRW(spi, data, 2);
+}
+
+void Display_Point(uint8_t N){
+    uint8_t Address = N/8;
+    uint8_t bit = N%8;
+    uint8_t data = 1<<bit;
+    sendData(Address +1, data);
+}
+
+void clearDisplay(){
+    for(int i=0;i<8;i++){
+        sendData(i+1,0x00);
+    }
+}
+void Init_mpu(void){
+    wiringPiI2CWriteReg8(mpu,25,9);      //sample rate 100Hz
+    wiringPiI2CWriteReg8(mpu,26,3);         // enable DLPE fc = 44Hz
+    wiringPiI2CWriteReg8(mpu,27,0x10);       // gyro +-1000o/s
+    wiringPiI2CWriteReg8(mpu,28,0x08);      // acc +-4g
+    wiringPiI2CWriteReg8(mpu,107,1);           // clock source gyro X
+}
+
+int main(void){
+    //setup SPI
+    wiringPiSPISetup(spi, 10000000);
+    sendData(0x09, 0x00);
+    sendData(0x0A, 0x0F);
+    sendData(0x0B, 0x07);
+    sendData(0x0C, 1);
+    sendData(0x0F, 0);
+
+//     // Cấu hình MAX7219
+//     sendData(0x09, 0x00); 
+//     sendData(0x0A, 0x0F); 
+//     sendData(0x0B, 0x07); 
+//     sendData(0x0C, 0x01); 
+//     sendData(0x0F, 0x00);
+    
+
+    //Load I2C driver
+    mpu = wiringPiI2CSetup(0x68);
+    //check i2c connection
+    if (wiringPiI2CReadReg8(mpu,117) != 0x68){
+        printf("Connection fail \n");
+        exit(0);
+    }
+    // setup mpu 6050
+    Init_mpu();
+    // read sensor values
+    while(1){
+        ax_15_8=wiringPiI2CReadReg8(mpu,59);
+        ax_7_0=wiringPiI2CReadReg8(mpu,60);
+        ay_15_8=wiringPiI2CReadReg8(mpu,61);
+        ay_7_0= wiringPiI2CReadReg8(mpu,62);
+        az_15_8=wiringPiI2CReadReg8(mpu,63);
+        az_7_0=wiringPiI2CReadReg8(mpu,64);
+
+        ax= ((ax_15_8<<8)|ax_7_0);
+        ay= ((ay_15_8<<8)|ay_7_0);
+        az= ((az_15_8<<8)|az_7_0);
+
+        float giatri_ax = (float) ax/8192.0; //+-4g nen suy ra sen
+        float giatri_ay = (float) ay/8192.0;
+        float giatri_az = (float) az/8192.0;
+
+        float alpha_y = atan2(giatri_ax,giatri_az)*(180/M_PI);
+        float alpha_x = atan2(giatri_ay,giatri_az)*(180/M_PI);
+        float alpha_z = atan2(giatri_ay,giatri_ax)*(180/M_PI);
+        printf("alpha_x la :%.2f   alpha_y la:%.2f   alpha_z la:%.2f\n",alpha_x,alpha_y,alpha_z);
+
+        delta = 0;
+
+        if(alpha_x > 30){           // Nghieng phai
+            delta -= 1; 
+        }
+        else if(alpha_x <-30){     // Nghieng trai
+            delta += 1;
+        }
+        
+        if(alpha_y > 30){          // Dich len
+            delta += 8;
+        }
+        else if(alpha_y < -30){    //Dich xuong
+            delta -= 8;
+        }
+        
+        newLEDPosition = currentLEDPosition + delta;
+        if(newLEDPosition <= 0){
+            newLEDPosition = 0;
+        }
+        if(newLEDPosition >= 63){
+            newLEDPosition = 63;
+        }
+
+        if(newLEDPosition >= 0 && newLEDPosition <= 63 ){
+            clearDisplay();
+            Display_Point(newLEDPosition);
+            currentLEDPosition = newLEDPosition;
+        }
+        sleep(1);
+    }
+    return 0;
+}
